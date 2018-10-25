@@ -298,6 +298,58 @@ module ActiveRecord
       end
     end
 
+    def test_load_interlocking
+      running_acquired = Concurrent::CyclicBarrier.new(2)
+      connection_acquired = Concurrent::CountDownLatch.new
+      start = Concurrent::CountDownLatch.new
+
+      request_exclusive_complete = false
+      request_share_complete = false
+
+      request_exclusive = Thread.new do
+        ActiveSupport::Dependencies.interlock.running do
+          running_acquired.wait
+          ActiveSupport::Dependencies.interlock.loading do
+            @connection.send(:log, "SELECT 1") { }
+          end
+        end
+        request_exclusive_complete = true
+      end
+
+      request_share = Thread.new do
+        ActiveSupport::Dependencies.interlock.running do
+          running_acquired.wait
+          connection_acquired.wait
+          @connection.send(:log, "SELECT 1") { }
+        end
+        request_share_complete = true
+      end
+
+      connection_only = Thread.new do
+        @connection.send(:log, "SELECT 1") do
+          connection_acquired.count_down
+          start.wait
+        end
+      end
+
+      # Give threads enough time to block waiting for the next lock
+      sleep 0.1
+      start.count_down
+
+      # Give threads enough time to complete
+      sleep 1
+      [request_exclusive, request_share, connection_only].each_with_index do |thread, index|
+        unless thread.join(0.001)
+          puts("======== thread #{index} failed to terminate ========")
+          puts(thread.backtrace)
+          thread.kill
+        end
+      end
+
+      assert request_exclusive_complete
+      assert request_share_complete
+    end
+
     def test_supports_multi_insert_is_deprecated
       assert_deprecated { @connection.supports_multi_insert? }
     end
