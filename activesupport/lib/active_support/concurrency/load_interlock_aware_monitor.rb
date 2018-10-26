@@ -4,13 +4,15 @@ require "monitor"
 
 module ActiveSupport
   module Concurrency
-    # A monitor that will permit dependency loading while blocked waiting for
-    # the lock.
+    # A monitor that will permit dependency loading while inside synchronize
     class LoadInterlockAwareMonitor < Monitor
-      # Enters an exclusive section, but allows dependency loading while blocked
-      def mon_enter
-        mon_try_enter ||
-          ActiveSupport::Dependencies.interlock.permit_concurrent_loads { super }
+      # Enters an exclusive section, but allows dependency loading while in the block
+      def synchronize
+        ActiveSupport::Dependencies.interlock.permit_concurrent_loads do
+          super do
+            yield
+          end
+        end
       end
     end
   end
